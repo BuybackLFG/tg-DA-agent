@@ -15,3 +15,4 @@ ENV MPLBACKEND=Agg
 COPY run.py /run.py
 
 ENTRYPOINT ["python", "/run.py"]
+CMD ["/workspace/analysis.py"]

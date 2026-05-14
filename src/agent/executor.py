@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,13 +48,7 @@ async def execute_python(
 ) -> ExecutionResult:
     """Execute Python code inside a Docker sandbox container.
 
-    Args:
-        code: Python source code to execute.
-        dataset_path: Absolute path to the dataset file to mount inside the sandbox.
-        extra_files: Mapping of filename -> content to write into the sandbox workspace.
-
-    Returns:
-        ExecutionResult with stdout, stderr, exit code and any generated output files.
+    Uses asyncio.create_subprocess_exec to avoid shell quoting issues.
     """
     with tempfile.TemporaryDirectory(prefix="sandbox_") as tmpdir:
         tmp_path = Path(tmpdir)
@@ -68,39 +61,35 @@ async def execute_python(
         script_path = workspace / "analysis.py"
         script_path.write_text(code, encoding="utf-8")
 
-        # Mount dataset if provided
-        dataset_mount = ""
-        if dataset_path and Path(dataset_path).exists():
-            dataset_mount = f' -v "{dataset_path}:/workspace/dataset{Path(dataset_path).suffix}"'
-
         # Write extra files (e.g. helper scripts)
         if extra_files:
             for fname, fcontent in extra_files.items():
                 (workspace / fname).write_text(fcontent, encoding="utf-8")
 
-        # Build Docker run command
-        cmd_parts = [
+        # Build Docker run command as flat argument list (no shell)
+        cmd: list[str] = [
             "docker", "run", "--rm",
             "--network", "none",
-            "--read-only",
             "-m", MEMORY_LIMIT,
             "--cpus", CPU_LIMIT,
-            f'-v "{workspace}:/workspace"',
-            f'-v "{output_dir}:/output"',
+            "-v", f"{workspace}:/workspace",
+            "-v", f"{output_dir}:/output",
         ]
-        if dataset_mount:
-            cmd_parts.append(dataset_mount)
-        cmd_parts.extend([
+
+        # Mount dataset if provided
+        if dataset_path and Path(dataset_path).exists():
+            cmd.extend(["-v", f"{dataset_path}:/workspace/dataset{Path(dataset_path).suffix}"])
+
+        cmd.extend([
             SANDBOX_IMAGE,
-            "python", "/workspace/analysis.py",
+            "/workspace/analysis.py",
         ])
 
-        cmd = " ".join(cmd_parts)
-        logger.info("Executing sandbox command: %s", cmd)
+        logger.info("Executing sandbox command: %s", " ".join(cmd))
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -118,7 +107,7 @@ async def execute_python(
                 except Exception:
                     pass
                 stdout_data = b""
-                stderr_data = b"Execution timed out"
+                stderr_data = b"Execution timed out".encode()
                 timed_out = True
                 returncode = -1
 

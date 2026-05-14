@@ -5,7 +5,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import Message
 
-from src.agent.llm_client import LLMClient
+from src.agent.llm_client import LLMClient, LLMAuthError
 from src.agent.tools import get_tools
 from src.agent.prompts import build_analysis_messages
 from src.agent.executor import execute_python
@@ -45,9 +45,24 @@ async def run_analysis(
 
         try:
             msg_dict, tool_calls = await llm.chat_with_tools(current_messages, tools)
+        except LLMAuthError as exc:
+            logger.error("LLM auth failed at step %s: %s", step, exc)
+            return (
+                "🔑 Ошибка авторизации в LLM API.\n\n"
+                "Возможные причины:\n"
+                "1. API ключ не указан или указан неверно в файле .env (LLM_API_KEY)\n"
+                "2. API ключ устарел или был отозван\n"
+                "3. Неправильный base URL (LLM_BASE_URL)\n\n"
+                "Проверьте настройки и перезапустите бота.",
+                collected_files,
+            )
         except Exception as exc:
             logger.error("LLM call failed at step %s: %s", step, exc)
-            return f"Ошибка при обращении к LLM: {exc}", collected_files
+            return (
+                f"❌ Ошибка при обращении к LLM:\n<pre>{exc}</pre>\n\n"
+                f"Если ошибка повторяется, проверьте настройки API в .env",
+                collected_files,
+            )
 
         # No tool calls -> model gave a direct answer (treat as report)
         if not tool_calls:

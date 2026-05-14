@@ -11,6 +11,11 @@ from src.agent.tools import TOOL_NAMES
 logger = logging.getLogger(__name__)
 
 
+class LLMAuthError(Exception):
+    """Raised when LLM API authentication fails (401 Unauthorized)."""
+    pass
+
+
 class LLMClient:
     """Async OpenAI-compatible LLM client with tool-calling support and fallback parsing."""
 
@@ -32,6 +37,15 @@ class LLMClient:
             self.model,
             self.base_url,
         )
+
+    def _handle_error(self, exc: Exception) -> None:
+        """Transform low-level API errors into meaningful exceptions."""
+        error_str = str(exc).lower()
+        if "401" in str(exc) or "unauthorized" in error_str:
+            raise LLMAuthError(
+                "Ошибка авторизации в LLM API. Проверьте LLM_API_KEY в файле .env."
+            ) from exc
+        raise
 
     async def chat(
         self,
@@ -60,7 +74,8 @@ class LLMClient:
             }
         except Exception as exc:
             logger.error("LLM chat request failed: %s", exc)
-            raise
+            self._handle_error(exc)
+            raise  # unreachable, _handle_error always raises
 
     async def chat_with_tools(
         self,
@@ -116,7 +131,8 @@ class LLMClient:
 
         except Exception as exc:
             logger.error("LLM chat_with_tools request failed: %s", exc)
-            raise
+            self._handle_error(exc)
+            raise  # unreachable, _handle_error always raises
 
     def _parse_fallback_tool_calls(self, content: str) -> list[dict[str, Any]]:
         """Attempt to extract tool calls from free-form text when native tool_calling fails.

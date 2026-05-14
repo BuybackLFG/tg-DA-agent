@@ -16,9 +16,34 @@ def setup_logging() -> None:
     )
 
 
+def validate_settings() -> None:
+    """Validate critical settings before starting the bot."""
+    errors: list[str] = []
+
+    if not settings.bot_token or "your" in settings.bot_token.lower():
+        errors.append("BOT_TOKEN не настроен (указан placeholder в .env?)")
+
+    if not settings.llm_api_key or "your" in settings.llm_api_key.lower():
+        errors.append("LLM_API_KEY не настроен (указан placeholder в .env?)")
+
+    if not settings.llm_base_url:
+        errors.append("LLM_BASE_URL не настроен")
+
+    if errors:
+        raise RuntimeError(
+            "\n".join(["❌ Ошибка конфигурации:"] + errors + ["", "Проверьте файл .env и перезапустите бота."])
+        )
+
+
 async def main() -> None:
     setup_logging()
     logger = logging.getLogger(__name__)
+
+    try:
+        validate_settings()
+    except RuntimeError as exc:
+        logger.critical(str(exc))
+        raise
 
     bot = Bot(
         token=settings.bot_token,
