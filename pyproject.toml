@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "data-agent-bot"
+version = "0.1.0"
+description = "Telegram bot for autonomous data analysis via LLM agent with code execution sandbox"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+aiogram = "^3.13"
+openai = "^1.54"
+redis = "^5.2"
+pydantic = "^2.9"
+pydantic-settings = "^2.6"
+pandas = "^2.2"
+numpy = "^2.1"
+matplotlib = "^3.9"
+seaborn = "^0.13"
+openpyxl = "^3.1"
+python-dotenv = "^1.0"
+structlog = "^24.4"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-asyncio = "^0.24"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
