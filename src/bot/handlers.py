@@ -4,16 +4,19 @@ from pathlib import Path
 from aiogram import Router, Bot, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, Document
+from aiogram.types import Message, Document, BufferedInputFile
 
 from src.bot.states import AnalysisStates
 from src.utils.dataset_io import load_dataset, profile_dataset, profile_to_text
-from src.utils.temp_manager import get_chat_temp_dir
+from src.utils.temp_manager import get_chat_temp_dir, cleanup_chat_temp
+from src.agent.react_loop import run_analysis
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+
+TELEGRAM_MAX_MESSAGE_LENGTH = 4000
 
 
 @router.message(Command("start"))
@@ -88,22 +91,103 @@ async def handle_non_file(message: Message) -> None:
 
 
 @router.message(AnalysisStates.waiting_context, Command("skip"))
-async def skip_context(message: Message, state: FSMContext) -> None:
+async def skip_context(message: Message, state: FSMContext, bot: Bot) -> None:
     """Allow user to skip providing context."""
     await state.update_data(user_context="")
-    await message.answer("Контекст не указан. Начинаю анализ...")
-    await state.set_state(AnalysisStates.analyzing)
-    # TODO: trigger analysis pipeline (Step 7+)
+    await _start_analysis(message, state, bot)
 
 
 @router.message(AnalysisStates.waiting_context)
-async def handle_context(message: Message, state: FSMContext) -> None:
+async def handle_context(message: Message, state: FSMContext, bot: Bot) -> None:
     """Receive user instructions/context for the analysis."""
     user_context = message.text or ""
     await state.update_data(user_context=user_context)
-    await message.answer("Контекст получен. Начинаю анализ данных...")
+    await _start_analysis(message, state, bot)
+
+
+async def _start_analysis(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Trigger the analysis pipeline."""
+    data = await state.get_data()
+    file_path = data.get("file_path")
+    profile = data.get("profile")
+    user_context = data.get("user_context", "")
+
+    if not file_path or not profile:
+        await message.answer("Ошибка: данные о файле потеряны. Начни заново с /start.")
+        await state.clear()
+        return
+
+    status_message = await message.answer("🚀 Начинаю анализ данных...")
     await state.set_state(AnalysisStates.analyzing)
-    # TODO: trigger analysis pipeline (Step 7+)
+
+    try:
+        report, output_files = await run_analysis(
+            bot=bot,
+            chat_id=message.chat.id,
+            dataset_path=file_path,
+            profile=profile,
+            user_context=user_context,
+            status_message=status_message,
+        )
+    except Exception as exc:
+        logger.error("Analysis failed for chat %s: %s", message.chat.id, exc)
+        await status_message.edit_text(f"❌ Анализ завершился с ошибкой:\n<pre>{exc}</pre>")
+        await state.clear()
+        cleanup_chat_temp(message.chat.id)
+        return
+
+    # Send report
+    await _send_report(bot, message.chat.id, report, status_message)
+
+    # Send output files (plots)
+    if output_files:
+        await _send_output_files(bot, message.chat.id, output_files, status_message)
+
+    await state.clear()
+    cleanup_chat_temp(message.chat.id)
+    logger.info("Analysis completed for chat %s", message.chat.id)
+
+
+async def _send_report(
+    bot: Bot,
+    chat_id: int,
+    report: str,
+    status_message: Message,
+) -> None:
+    """Send the final report, splitting if too long."""
+    if not report.strip():
+        await status_message.edit_text("✅ Анализ завершён, но отчёт пуст.")
+        return
+
+    # If report is short enough, edit the status message
+    if len(report) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+        await status_message.edit_text(f"📊 <b>Отчёт по анализу</b>\n\n{report}")
+        return
+
+    # Otherwise send as new messages
+    await status_message.edit_text("📊 <b>Отчёт по анализу</b> (слишком длинный, отправляю частями):")
+    for i in range(0, len(report), TELEGRAM_MAX_MESSAGE_LENGTH):
+        chunk = report[i:i + TELEGRAM_MAX_MESSAGE_LENGTH]
+        await bot.send_message(chat_id, chunk)
+
+
+async def _send_output_files(
+    bot: Bot,
+    chat_id: int,
+    output_files: dict[str, bytes],
+    status_message: Message,
+) -> None:
+    """Send generated plots and files to the user."""
+    for filename, filedata in output_files.items():
+        try:
+            input_file = BufferedInputFile(file=filedata, filename=filename)
+            if filename.lower().endswith(".png"):
+                await bot.send_photo(chat_id, photo=input_file, caption=f"📈 {filename}")
+            else:
+                await bot.send_document(chat_id, document=input_file, caption=f"📎 {filename}")
+        except Exception as exc:
+            logger.error("Failed to send file %s: %s", filename, exc)
+            await bot.send_message(chat_id, f"⚠️ Не удалось отправить файл {filename}: {exc}")
 
 
 @router.message(AnalysisStates.analyzing)
