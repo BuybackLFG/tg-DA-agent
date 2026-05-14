@@ -105,6 +105,13 @@ data-agent-bot/
 ## Скриншоты работы 
 
 
-![alt text](1win.png)
+![alt text](screenshots/1win.png)
 
-![alt text](2win.png)
+![alt text](screenshots/2win.png)
+
+![alt text](screenshots/3win.png)
+
+![alt text](screenshots/4win.png)
+
+![alt text](screenshots/5win.png)
+![alt text](screenshots/6win.png)
