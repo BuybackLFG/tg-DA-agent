@@ -122,7 +122,10 @@ async def execute_python(
             )
 
         stdout = stdout_data.decode("utf-8", errors="replace")
-        stderr = stderr_data.decode("utf-8", errors="replace")
+        stderr_raw = stderr_data.decode("utf-8", errors="replace")
+
+        # Filter Docker noise from stderr before sending to LLM
+        stderr = _filter_docker_stderr(stderr_raw)
 
         # Collect output files (plots, CSVs, etc.)
         output_files: dict[str, bytes] = {}
@@ -138,6 +141,36 @@ async def execute_python(
             output_files=output_files,
             timed_out=timed_out,
         )
+
+
+# Docker warnings that are harmless and confuse the LLM
+DOCKER_NOISE_PATTERNS = [
+    "WARNING:",
+    "docker:",
+    "time=",
+    "level=",
+    "msg=",
+    "Your kernel does not support",
+    "read-only file system",
+    " mount ",
+    "cgroup",
+    "security options",
+    "deprecated",
+    "security_opt",
+]
+
+
+def _filter_docker_stderr(stderr: str) -> str:
+    """Remove Docker-specific noise from stderr so LLM doesn't panic."""
+    if not stderr:
+        return ""
+    lines = stderr.splitlines()
+    filtered = []
+    for line in lines:
+        if any(noise in line for noise in DOCKER_NOISE_PATTERNS):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered)
 
 
 def build_sandbox_image() -> None:

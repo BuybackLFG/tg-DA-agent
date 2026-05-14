@@ -120,9 +120,12 @@ async def run_analysis(
                 await status_message.edit_text(f"🐍 Шаг {step}/{MAX_STEPS}: выполняю код...")
                 logger.info("Step %s: executing Python sandbox", step)
 
+                # Normalize path for Docker (Windows backslashes → POSIX)
+                normalized_dataset_path = str(Path(dataset_path).resolve()).replace("\\", "/")
+
                 exec_result = await execute_python(
                     code=code,
-                    dataset_path=dataset_path,
+                    dataset_path=normalized_dataset_path,
                 )
 
                 # Collect any generated plots/files
