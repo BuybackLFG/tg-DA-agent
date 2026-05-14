@@ -7,6 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, Document
 
 from src.bot.states import AnalysisStates
+from src.utils.dataset_io import load_dataset, profile_dataset, profile_to_text
+from src.utils.temp_manager import get_chat_temp_dir
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -42,9 +44,7 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot) -> None
         )
         return
 
-    # Download file to temporary location
-    temp_dir = Path("tmp") / str(message.chat.id)
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = get_chat_temp_dir(message.chat.id)
     local_path = temp_dir / file_name
 
     try:
@@ -55,13 +55,26 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot) -> None
         await message.answer("Не удалось загрузить файл. Попробуй ещё раз.")
         return
 
+    # Load and profile the dataset
+    try:
+        df = load_dataset(local_path)
+        profile = profile_dataset(df)
+        profile_text = profile_to_text(profile)
+        logger.info("Profiled dataset for chat %s: %s rows", message.chat.id, profile["shape"]["rows"])
+    except Exception as exc:
+        logger.error("Failed to profile dataset: %s", exc)
+        await message.answer("Файл загружен, но не удалось прочитать датасет. Проверь формат файла.")
+        return
+
     await state.update_data(
         file_path=str(local_path),
         file_name=file_name,
+        profile=profile,
     )
 
     await message.answer(
         f"Файл <b>{file_name}</b> получен.\n\n"
+        f"<pre>{profile_text}</pre>\n\n"
         "Теперь напиши, что именно нужно проанализировать — контекст, вопросы, на что обратить внимание. "
         "Или отправь /skip, если хочешь, чтобы я сам выбрал направление анализа."
     )
@@ -79,7 +92,6 @@ async def skip_context(message: Message, state: FSMContext) -> None:
     """Allow user to skip providing context."""
     await state.update_data(user_context="")
     await message.answer("Контекст не указан. Начинаю анализ...")
-    # Transition to analyzing — actual analysis will be triggered here later
     await state.set_state(AnalysisStates.analyzing)
     # TODO: trigger analysis pipeline (Step 7+)
 
