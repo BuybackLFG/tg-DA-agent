@@ -12,6 +12,6 @@ RUN mkdir -p /output && chmod 777 /output
 ENV MPLBACKEND=Agg
 
 # Copy runner
-COPY sandbox/run.py /run.py
+COPY run.py /run.py
 
 ENTRYPOINT ["python", "/run.py"]
