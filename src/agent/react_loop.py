@@ -9,6 +9,7 @@ from src.agent.llm_client import LLMClient
 from src.agent.tools import get_tools
 from src.agent.prompts import build_analysis_messages
 from src.agent.executor import execute_python
+from src.agent.guardrails import Guardrails
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,20 @@ async def run_analysis(
 
         # No tool calls -> model gave a direct answer (treat as report)
         if not tool_calls:
+            content = msg_dict.get("content", "Анализ завершён без результатов.")
             logger.info("No tool calls at step %s, finishing with direct answer.", step)
-            return msg_dict.get("content", "Анализ завершён без результатов."), collected_files
+
+            output_guard = Guardrails.check_output(content)
+            if not output_guard.is_safe:
+                logger.warning("Output guardrail triggered on direct answer: %s", output_guard.reason)
+                return (
+                    f"⚠️ Ответ был заблокирован системой безопасности.\n"
+                    f"Причина: {output_guard.reason}\n\n"
+                    f"Попробуйте переформулировать запрос.",
+                    collected_files,
+                )
+
+            return content, collected_files
 
         # Add assistant message (with tool_calls) to history
         assistant_msg = msg_dict.copy()
@@ -80,6 +93,15 @@ async def run_analysis(
 
             if name == "execute_python":
                 code = args.get("code", "")
+
+                # Guardrails: check generated code for obvious malicious patterns
+                code_guard = Guardrails.check_input(code)
+                if not code_guard.is_safe:
+                    logger.warning("Code guardrail triggered at step %s: %s", step, code_guard.reason)
+                    result = {"error": f"Generated code was blocked by security policy: {code_guard.reason}"}
+                    history.append(llm.build_tool_result_message(tc["id"], name, result))
+                    continue
+
                 await status_message.edit_text(f"🐍 Шаг {step}/{MAX_STEPS}: выполняю код...")
                 logger.info("Step %s: executing Python sandbox", step)
 
@@ -114,6 +136,18 @@ async def run_analysis(
             elif name == "finalize_report":
                 report = args.get("report", "")
                 logger.info("Step %s: finalizing report", step)
+
+                # Guardrails: validate output report
+                output_guard = Guardrails.check_output(report)
+                if not output_guard.is_safe:
+                    logger.warning("Output guardrail triggered: %s", output_guard.reason)
+                    return (
+                        f"⚠️ Сгенерированный отчёт был заблокирован системой безопасности.\n"
+                        f"Причина: {output_guard.reason}\n\n"
+                        f"Попробуйте переформулировать запрос или загрузить другой датасет.",
+                        collected_files,
+                    )
+
                 return report, collected_files
 
             else:

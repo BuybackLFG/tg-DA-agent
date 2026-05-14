@@ -10,6 +10,7 @@ from src.bot.states import AnalysisStates
 from src.utils.dataset_io import load_dataset, profile_dataset, profile_to_text
 from src.utils.temp_manager import get_chat_temp_dir, cleanup_chat_temp
 from src.agent.react_loop import run_analysis
+from src.agent.guardrails import Guardrails
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -69,6 +70,20 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot) -> None
         await message.answer("Файл загружен, но не удалось прочитать датасет. Проверь формат файла.")
         return
 
+    # Guardrails: check sample rows for embedded injection instructions
+    for row in profile.get("sample_rows", []):
+        for cell_value in row.values():
+            cell_str = str(cell_value)
+            guard = Guardrails.check_dataset_text(cell_str)
+            if not guard.is_safe:
+                logger.warning("Dataset injection detected for chat %s: %s", message.chat.id, guard.reason)
+                await message.answer(
+                    f"⚠️ Обнаружена подозрительная инструкция внутри данных датасета. "
+                    f"Файл отклонён в целях безопасности.\n"
+                    f"Причина: {guard.reason}"
+                )
+                return
+
     await state.update_data(
         file_path=str(local_path),
         file_name=file_name,
@@ -101,6 +116,17 @@ async def skip_context(message: Message, state: FSMContext, bot: Bot) -> None:
 async def handle_context(message: Message, state: FSMContext, bot: Bot) -> None:
     """Receive user instructions/context for the analysis."""
     user_context = message.text or ""
+
+    guard = Guardrails.check_input(user_context)
+    if not guard.is_safe:
+        logger.warning("Input guardrail triggered for chat %s: %s", message.chat.id, guard.reason)
+        await message.answer(
+            f"⚠️ Ваш запрос содержит подозрительные инструкции и был отклонён в целях безопасности.\n"
+            f"Причина: {guard.reason}\n\n"
+            f"Пожалуйста, опишите задачу анализа без попыток изменить поведение бота."
+        )
+        return
+
     await state.update_data(user_context=user_context)
     await _start_analysis(message, state, bot)
 
